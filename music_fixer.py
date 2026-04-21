@@ -289,6 +289,7 @@ def process_file(
     path: Path,
     genre_client: Optional[GenreClient],
     dry_run: bool,
+    sort_root: Optional[Path] = None,
 ) -> None:
     print(f"\n{path.name}")
     existing = read_tags(path)
@@ -331,12 +332,19 @@ def process_file(
     new_stem = safe_filename(f"{info.artist} - {info.title}")
     new_path = path.with_name(new_stem + path.suffix.lower())
 
+    # Determine final target if we're sorting into genre folders.
+    final_path = new_path
+    if sort_root and info.genre:
+        genre_dir = sort_root / safe_filename(info.genre)
+        final_path = genre_dir / new_path.name
+
     if dry_run:
-        if new_path != path:
-            print(f"  [dry-run] would rename -> {new_path.name}")
+        print("  [dry-run] would rewrite tags")
+        if final_path != path:
+            rel = final_path.relative_to(sort_root) if sort_root else final_path.name
+            print(f"  [dry-run] would move -> {rel}")
         else:
             print("  [dry-run] filename already correct")
-        print("  [dry-run] would rewrite tags")
         return
 
     try:
@@ -345,16 +353,36 @@ def process_file(
         print(f"  ! failed to write tags: {e}")
         return
 
-    if new_path != path:
-        if new_path.exists():
-            # Don't clobber a different file that already has the canonical name.
+    current = path
+
+    # Rename in place first so we log the new filename even if the move fails.
+    if new_path != current:
+        if new_path.exists() and new_path != current:
             print(f"  ! target exists, skipping rename: {new_path.name}")
+        else:
+            try:
+                current.rename(new_path)
+                current = new_path
+                print(f"  renamed -> {new_path.name}")
+            except OSError as e:
+                print(f"  ! rename failed: {e}")
+                return
+
+    # Move into genre subfolder if requested and we have a genre.
+    if sort_root and info.genre and final_path != current:
+        try:
+            final_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            print(f"  ! could not create genre folder: {e}")
+            return
+        if final_path.exists():
+            print(f"  ! sort target exists, skipping move: {final_path.parent.name}/{final_path.name}")
             return
         try:
-            path.rename(new_path)
-            print(f"  renamed -> {new_path.name}")
+            current.rename(final_path)
+            print(f"  sorted -> {final_path.parent.name}/")
         except OSError as e:
-            print(f"  ! rename failed: {e}")
+            print(f"  ! move failed: {e}")
 
 
 def iter_music_files(root: Path):
@@ -368,6 +396,11 @@ def main() -> int:
     ap.add_argument("path", type=Path, help="Folder containing music files")
     ap.add_argument("--dry-run", action="store_true", help="Preview changes only")
     ap.add_argument("--no-genre", action="store_true", help="Skip Groq genre lookup")
+    ap.add_argument(
+        "--sort-by-genre",
+        action="store_true",
+        help="Move each file into <root>/<Genre>/ after processing",
+    )
     ap.add_argument("--api-key", help="Groq API key (else $GROQ_API_KEY)")
     ap.add_argument("--model", default=GROQ_MODEL, help="Groq model name")
     args = ap.parse_args()
@@ -393,10 +426,14 @@ def main() -> int:
         print("No supported audio files found.")
         return 0
 
+    sort_root: Optional[Path] = None
+    if args.sort_by_genre:
+        sort_root = args.path if args.path.is_dir() else args.path.parent
+
     print(f"Processing {len(files)} file(s)...")
     for f in files:
         try:
-            process_file(f, genre_client, args.dry_run)
+            process_file(f, genre_client, args.dry_run, sort_root=sort_root)
         except Exception as e:
             print(f"  ! error on {f}: {e}")
 

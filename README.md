@@ -39,6 +39,12 @@ Skip the Groq genre lookup:
 python music_fixer.py "/path/to/music" --no-genre
 ```
 
+Sort tracks into `<root>/<Genre>/` subfolders after tagging:
+
+```bash
+python music_fixer.py "/path/to/music" --sort-by-genre
+```
+
 Use a different Groq model:
 
 ```bash
